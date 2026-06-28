@@ -13,6 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 # --- Конфигурация ---
 TOKEN = '8890934172:AAGOosCXBaStONs-nzXNWED5w2ikXT0SZMY'
 REMINDERS_FILE = 'reminders.json'
+DEFAULT_TIMEZONE = 3  # Москва по умолчанию
 
 # --- Инициализация бота ---
 bot = Bot(token=TOKEN)
@@ -21,7 +22,7 @@ dp = Dispatcher(storage=storage)
 
 # Структура для хранения напоминаний в памяти
 reminders: Dict[str, List[dict]] = {}
-users: Dict[str, dict] = {}  # Хранит настройки пользователей {user_id: {'timezone': int}}
+users: Dict[str, dict] = {}  # {user_id: {'timezone': int}}
 
 # --- Машина состояний ---
 class ReminderForm(StatesGroup):
@@ -77,6 +78,10 @@ def save_users():
             json.dump(users, f, ensure_ascii=False, indent=2)
     except:
         pass
+
+def get_user_timezone(user_id: str) -> int:
+    """Возвращает часовой пояс пользователя или DEFAULT_TIMEZONE"""
+    return users.get(user_id, {}).get('timezone', DEFAULT_TIMEZONE)
 
 # --- Фоновая задача ---
 async def check_reminders():
@@ -145,16 +150,18 @@ def get_confirm_keyboard():
 # --- Команда /start ---
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    user_id = str(message.from_user.id)
+    tz = get_user_timezone(user_id)
     await message.answer(
-        "👋 Привет! Я бот для напоминаний.\n\n"
+        f"👋 Привет! Я бот для напоминаний.\n\n"
+        f"🕐 Твой часовой пояс: UTC{tz:+d}\n"
+        f"(по умолчанию Москва UTC+3)\n\n"
         "Команды:\n"
         "/new - Создать напоминание\n"
         "/list - Список напоминаний\n"
         "/del - Удалить напоминание\n"
         "/clear - Очистить все\n"
-        "/set_timezone - Настроить часовой пояс\n\n"
-        "По умолчанию используется UTC+0\n"
-        "Настрой свой часовой пояс командой /set_timezone"
+        "/set_timezone - Сменить часовой пояс"
     )
 
 # --- Настройка часового пояса ---
@@ -162,14 +169,13 @@ async def cmd_start(message: Message):
 async def cmd_set_timezone(message: Message, state: FSMContext):
     await state.set_state(TimezoneForm.waiting_for_timezone)
     await message.answer(
-        "🕐 **Настройка часового пояса**\n\n"
+        "🕐 **Смена часового пояса**\n\n"
         "Введи смещение от UTC в часах.\n"
         "Например:\n"
         "• Москва: `+3`\n"
         "• Нью-Йорк: `-4`\n"
         "• Лондон: `0`\n"
-        "• Владивосток: `+10`\n\n"
-        "Твой текущий часовой пояс можно узнать в настройках телефона.",
+        "• Владивосток: `+10`",
         parse_mode="Markdown"
     )
 
@@ -218,8 +224,8 @@ async def handle_all_callbacks(callback: CallbackQuery, state: FSMContext):
     data = callback.data
     user_id = str(callback.from_user.id)
     
-    # Получаем часовой пояс пользователя
-    user_timezone = users.get(user_id, {}).get('timezone', 0)
+    # Получаем часовой пояс пользователя (по умолчанию +3)
+    user_timezone = get_user_timezone(user_id)
     
     # --- ОБРАБОТКА ВЫБОРА ВРЕМЕНИ ---
     if data.startswith('time_'):
@@ -344,7 +350,7 @@ async def process_custom_time(message: Message, state: FSMContext):
     reminder_time = None
     
     user_id = str(message.from_user.id)
-    user_timezone = users.get(user_id, {}).get('timezone', 0)
+    user_timezone = get_user_timezone(user_id)
     
     try:
         if '.' in time_str and ':' in time_str:
@@ -402,7 +408,7 @@ async def cmd_list(message: Message):
         await message.answer("📭 Нет напоминаний.")
         return
     
-    user_timezone = users.get(user_id, {}).get('timezone', 0)
+    user_timezone = get_user_timezone(user_id)
     
     user_reminders = sorted(reminders[user_id], key=lambda x: x['time'])
     response = "📋 **Ваши напоминания:**\n\n"
@@ -422,7 +428,7 @@ async def cmd_del(message: Message):
         await message.answer("📭 Нет напоминаний.")
         return
     
-    user_timezone = users.get(user_id, {}).get('timezone', 0)
+    user_timezone = get_user_timezone(user_id)
     
     args = message.text.split()
     if len(args) < 2:
@@ -481,13 +487,16 @@ async def cmd_clear(message: Message):
 # --- Команда /help ---
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
+    user_id = str(message.from_user.id)
+    tz = get_user_timezone(user_id)
     await message.answer(
-        "🤖 **Помощь**\n\n"
+        f"🤖 **Помощь**\n\n"
+        f"🕐 Твой часовой пояс: UTC{tz:+d}\n\n"
         "/new - Создать напоминание\n"
         "/list - Список напоминаний\n"
         "/del - Удалить напоминание\n"
         "/clear - Очистить всё\n"
-        "/set_timezone - Настроить часовой пояс\n\n"
+        "/set_timezone - Сменить часовой пояс\n\n"
         "При создании выбери время из кнопок!\n"
         "Или введи своё время в формате DD.MM.YYYY HH:MM\n\n"
         "⚠️ Время автоматически подстраивается под твой часовой пояс!"
@@ -499,6 +508,7 @@ async def main():
     load_reminders()
     print(f"Загружено пользователей: {len(users)}")
     print(f"Загружено напоминаний: {sum(len(r) for r in reminders.values())}")
+    print(f"Часовой пояс по умолчанию: UTC+{DEFAULT_TIMEZONE}")
     
     asyncio.create_task(check_reminders())
     
