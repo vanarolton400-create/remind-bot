@@ -21,11 +21,15 @@ dp = Dispatcher(storage=storage)
 
 # Структура для хранения напоминаний в памяти
 reminders: Dict[str, List[dict]] = {}
+users: Dict[str, dict] = {}  # Хранит настройки пользователей {user_id: {'timezone': int}}
 
 # --- Машина состояний ---
 class ReminderForm(StatesGroup):
     waiting_for_text = State()
     waiting_for_time = State()
+
+class TimezoneForm(StatesGroup):
+    waiting_for_timezone = State()
 
 # --- Загрузка и сохранение данных ---
 def load_reminders():
@@ -58,10 +62,21 @@ def save_reminders():
     except Exception as e:
         print(f"Ошибка сохранения: {e}")
 
-# --- Получение локального времени пользователя ---
-def get_user_time(user_timezone_offset: int = 0):
-    """Возвращает текущее время с учётом смещения пользователя"""
-    return datetime.datetime.now() + datetime.timedelta(hours=user_timezone_offset)
+def load_users():
+    global users
+    if os.path.exists('users.json'):
+        try:
+            with open('users.json', 'r', encoding='utf-8') as f:
+                users = json.load(f)
+        except:
+            users = {}
+
+def save_users():
+    try:
+        with open('users.json', 'w', encoding='utf-8') as f:
+            json.dump(users, f, ensure_ascii=False, indent=2)
+    except:
+        pass
 
 # --- Фоновая задача ---
 async def check_reminders():
@@ -73,7 +88,6 @@ async def check_reminders():
             for i, rem in enumerate(user_reminders):
                 if rem['time'] <= now_utc:
                     try:
-                        # Отправляем в UTC, но пользователь видит в своём часовом поясе
                         await bot.send_message(
                             chat_id=int(user_id),
                             text=f"⏰ НАПОМИНАНИЕ!\n\n{rem['text']}"
@@ -145,7 +159,8 @@ async def cmd_start(message: Message):
 
 # --- Настройка часового пояса ---
 @dp.message(Command("set_timezone"))
-async def cmd_set_timezone(message: Message):
+async def cmd_set_timezone(message: Message, state: FSMContext):
+    await state.set_state(TimezoneForm.waiting_for_timezone)
     await message.answer(
         "🕐 **Настройка часового пояса**\n\n"
         "Введи смещение от UTC в часах.\n"
@@ -154,33 +169,27 @@ async def cmd_set_timezone(message: Message):
         "• Нью-Йорк: `-4`\n"
         "• Лондон: `0`\n"
         "• Владивосток: `+10`\n\n"
-        "Твой текущий часовой пояс можно узнать в настройках телефона."
+        "Твой текущий часовой пояс можно узнать в настройках телефона.",
+        parse_mode="Markdown"
     )
-    context.user_data['waiting_for_timezone'] = True
 
-@dp.message()
-async def handle_timezone_input(message: Message, state: FSMContext):
-    if hasattr(context, 'user_data') and context.user_data.get('waiting_for_timezone'):
-        try:
-            offset = int(message.text.strip())
-            if offset < -12 or offset > 14:
-                await message.answer("❌ Неверное смещение. Введи число от -12 до +14.")
-                return
-            
-            # Сохраняем в базу или в память
-            user_id = str(message.from_user.id)
-            if 'users' not in globals():
-                global users
-                users = {}
-            if user_id not in users:
-                users[user_id] = {}
-            users[user_id]['timezone'] = offset
-            
-            await message.answer(f"✅ Часовой пояс установлен: UTC{offset:+d}")
-            context.user_data['waiting_for_timezone'] = False
-            
-        except ValueError:
-            await message.answer("❌ Введи число. Например: +3, -4, 0")
+@dp.message(TimezoneForm.waiting_for_timezone)
+async def process_timezone(message: Message, state: FSMContext):
+    try:
+        offset = int(message.text.strip())
+        if offset < -12 or offset > 14:
+            await message.answer("❌ Неверное смещение. Введи число от -12 до +14.")
+            return
+        
+        user_id = str(message.from_user.id)
+        users[user_id] = {'timezone': offset}
+        save_users()
+        
+        await state.clear()
+        await message.answer(f"✅ Часовой пояс установлен: UTC{offset:+d}")
+        
+    except ValueError:
+        await message.answer("❌ Введи число. Например: +3, -4, 0")
 
 # --- Команда /new ---
 @dp.message(Command("new"))
@@ -207,6 +216,10 @@ async def process_text(message: Message, state: FSMContext):
 async def handle_all_callbacks(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     data = callback.data
+    user_id = str(callback.from_user.id)
+    
+    # Получаем часовой пояс пользователя
+    user_timezone = users.get(user_id, {}).get('timezone', 0)
     
     # --- ОБРАБОТКА ВЫБОРА ВРЕМЕНИ ---
     if data.startswith('time_'):
@@ -217,12 +230,6 @@ async def handle_all_callbacks(callback: CallbackQuery, state: FSMContext):
             await callback.message.edit_text("❌ Ошибка: текст не найден. Начните заново /new")
             await state.clear()
             return
-        
-        # Получаем часовой пояс пользователя
-        user_id = str(callback.from_user.id)
-        user_timezone = 0
-        if 'users' in globals() and user_id in users:
-            user_timezone = users[user_id].get('timezone', 0)
         
         now = datetime.datetime.now()
         time_map = {
@@ -254,7 +261,6 @@ async def handle_all_callbacks(callback: CallbackQuery, state: FSMContext):
         reminder_time = time_map.get(data)
         if reminder_time:
             await state.update_data(time=reminder_time)
-            # Показываем время в часовом поясе пользователя
             local_time = reminder_time + datetime.timedelta(hours=user_timezone)
             formatted_time = local_time.strftime("%d.%m.%Y в %H:%M")
             await callback.message.edit_text(
@@ -276,11 +282,9 @@ async def handle_all_callbacks(callback: CallbackQuery, state: FSMContext):
                 await state.clear()
                 return
             
-            user_id = str(callback.from_user.id)
             if user_id not in reminders:
                 reminders[user_id] = []
             
-            # Сохраняем время в UTC
             reminders[user_id].append({
                 'text': text,
                 'time': reminder_time
@@ -289,10 +293,6 @@ async def handle_all_callbacks(callback: CallbackQuery, state: FSMContext):
             save_reminders()
             await state.clear()
             
-            # Показываем время в часовом поясе пользователя
-            user_timezone = 0
-            if 'users' in globals() and user_id in users:
-                user_timezone = users[user_id].get('timezone', 0)
             local_time = reminder_time + datetime.timedelta(hours=user_timezone)
             formatted_time = local_time.strftime("%d.%m.%Y в %H:%M")
             
@@ -308,8 +308,6 @@ async def handle_all_callbacks(callback: CallbackQuery, state: FSMContext):
     
     # --- ОБРАБОТКА УДАЛЕНИЯ ---
     elif data.startswith('del_'):
-        user_id = str(callback.from_user.id)
-        
         if data == 'del_cancel':
             await callback.message.delete()
             return
@@ -345,17 +343,12 @@ async def process_custom_time(message: Message, state: FSMContext):
     time_str = message.text.strip()
     reminder_time = None
     
-    # Получаем часовой пояс пользователя
     user_id = str(message.from_user.id)
-    user_timezone = 0
-    if 'users' in globals() and user_id in users:
-        user_timezone = users[user_id].get('timezone', 0)
+    user_timezone = users.get(user_id, {}).get('timezone', 0)
     
     try:
         if '.' in time_str and ':' in time_str:
-            # Парсим время в локальном времени пользователя
             local_time = datetime.datetime.strptime(time_str, "%d.%m.%Y %H:%M")
-            # Преобразуем в UTC
             reminder_time = local_time - datetime.timedelta(hours=user_timezone)
         elif time_str.startswith('+'):
             parts = time_str[1:]
@@ -377,7 +370,6 @@ async def process_custom_time(message: Message, state: FSMContext):
             return
         
         await state.update_data(time=reminder_time)
-        # Показываем время в часовом поясе пользователя
         local_display = reminder_time + datetime.timedelta(hours=user_timezone)
         formatted_time = local_display.strftime("%d.%m.%Y в %H:%M")
         await message.answer(
@@ -410,9 +402,7 @@ async def cmd_list(message: Message):
         await message.answer("📭 Нет напоминаний.")
         return
     
-    user_timezone = 0
-    if 'users' in globals() and user_id in users:
-        user_timezone = users[user_id].get('timezone', 0)
+    user_timezone = users.get(user_id, {}).get('timezone', 0)
     
     user_reminders = sorted(reminders[user_id], key=lambda x: x['time'])
     response = "📋 **Ваши напоминания:**\n\n"
@@ -432,9 +422,7 @@ async def cmd_del(message: Message):
         await message.answer("📭 Нет напоминаний.")
         return
     
-    user_timezone = 0
-    if 'users' in globals() and user_id in users:
-        user_timezone = users[user_id].get('timezone', 0)
+    user_timezone = users.get(user_id, {}).get('timezone', 0)
     
     args = message.text.split()
     if len(args) < 2:
@@ -507,11 +495,9 @@ async def cmd_help(message: Message):
 
 # --- Запуск ---
 async def main():
-    # Глобальная переменная для хранения настроек пользователей
-    global users
-    users = {}
-    
+    load_users()
     load_reminders()
+    print(f"Загружено пользователей: {len(users)}")
     print(f"Загружено напоминаний: {sum(len(r) for r in reminders.values())}")
     
     asyncio.create_task(check_reminders())
