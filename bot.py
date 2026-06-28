@@ -20,17 +20,15 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
 # Структура для хранения напоминаний в памяти
-# { str(user_id): [ {"text": str, "time": datetime.datetime} ] }
 reminders: Dict[str, List[dict]] = {}
 
-# --- Машина состояний для создания напоминания ---
+# --- Машина состояний ---
 class ReminderForm(StatesGroup):
     waiting_for_text = State()
     waiting_for_time = State()
 
 # --- Загрузка и сохранение данных ---
 def load_reminders():
-    """Загружает напоминания из JSON-файла."""
     global reminders
     if os.path.exists(REMINDERS_FILE):
         try:
@@ -42,11 +40,10 @@ def load_reminders():
                         rem['time'] = datetime.datetime.fromisoformat(rem['time'])
                         reminders[user_id].append(rem)
         except Exception as e:
-            print(f"Ошибка загрузки напоминаний: {e}")
+            print(f"Ошибка загрузки: {e}")
             reminders = {}
 
 def save_reminders():
-    """Сохраняет напоминания в JSON-файл."""
     data = {}
     for user_id, user_reminders in reminders.items():
         data[user_id] = []
@@ -59,11 +56,10 @@ def save_reminders():
         with open(REMINDERS_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"Ошибка сохранения напоминаний: {e}")
+        print(f"Ошибка сохранения: {e}")
 
-# --- Фоновая задача для проверки напоминаний ---
+# --- Фоновая задача ---
 async def check_reminders():
-    """Проверяет напоминания каждые 30 секунд и отправляет уведомления."""
     while True:
         now = datetime.datetime.now()
         to_remove = []
@@ -76,8 +72,8 @@ async def check_reminders():
                             chat_id=int(user_id),
                             text=f"⏰ НАПОМИНАНИЕ!\n\n{rem['text']}"
                         )
-                    except Exception as e:
-                        print(f"Не удалось отправить напоминание пользователю {user_id}: {e}")
+                    except:
+                        pass
                     to_remove.append((user_id, i))
         
         for user_id, i in sorted(to_remove, key=lambda x: x[1], reverse=True):
@@ -90,38 +86,35 @@ async def check_reminders():
         
         await asyncio.sleep(30)
 
-# --- Функции для создания кнопок времени ---
+# --- Клавиатуры ---
 def get_time_keyboard():
-    """Создает клавиатуру с вариантами времени."""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="⏰ Через 5 мин", callback_data="time_5m"),
-            InlineKeyboardButton(text="⏰ Через 15 мин", callback_data="time_15m"),
-            InlineKeyboardButton(text="⏰ Через 30 мин", callback_data="time_30m")
+            InlineKeyboardButton(text="⏰ 5 мин", callback_data="time_5m"),
+            InlineKeyboardButton(text="⏰ 15 мин", callback_data="time_15m"),
+            InlineKeyboardButton(text="⏰ 30 мин", callback_data="time_30m")
         ],
         [
-            InlineKeyboardButton(text="⏰ Через 1 час", callback_data="time_1h"),
-            InlineKeyboardButton(text="⏰ Через 2 часа", callback_data="time_2h"),
-            InlineKeyboardButton(text="⏰ Через 3 часа", callback_data="time_3h")
+            InlineKeyboardButton(text="⏰ 1 час", callback_data="time_1h"),
+            InlineKeyboardButton(text="⏰ 2 часа", callback_data="time_2h"),
+            InlineKeyboardButton(text="⏰ 3 часа", callback_data="time_3h")
         ],
         [
-            InlineKeyboardButton(text="📅 Через 1 день", callback_data="time_1d"),
-            InlineKeyboardButton(text="📅 Через 2 дня", callback_data="time_2d"),
-            InlineKeyboardButton(text="📅 Через 3 дня", callback_data="time_3d")
+            InlineKeyboardButton(text="📅 1 день", callback_data="time_1d"),
+            InlineKeyboardButton(text="📅 2 дня", callback_data="time_2d"),
+            InlineKeyboardButton(text="📅 3 дня", callback_data="time_3d")
         ],
         [
-            InlineKeyboardButton(text="📅 Через 1 неделю", callback_data="time_1w"),
-            InlineKeyboardButton(text="📅 Через 2 недели", callback_data="time_2w"),
-            InlineKeyboardButton(text="📅 Через месяц", callback_data="time_1M")
+            InlineKeyboardButton(text="📅 1 неделя", callback_data="time_1w"),
+            InlineKeyboardButton(text="📅 2 недели", callback_data="time_2w"),
+            InlineKeyboardButton(text="📅 1 месяц", callback_data="time_1M")
         ],
         [
             InlineKeyboardButton(text="✏️ Своё время", callback_data="time_custom")
         ]
     ])
-    return keyboard
 
 def get_confirm_keyboard():
-    """Клавиатура подтверждения."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ Да, создать", callback_data="confirm_yes"),
@@ -135,45 +128,48 @@ async def cmd_start(message: Message):
     await message.answer(
         "👋 Привет! Я бот для напоминаний.\n\n"
         "Команды:\n"
-        "/new - Создать новое напоминание\n"
-        "/list - Показать все напоминания\n"
+        "/new - Создать напоминание\n"
+        "/list - Список напоминаний\n"
         "/del - Удалить напоминание\n"
-        "/clear - Очистить все напоминания\n\n"
-        "Нажми /new и выбери время из кнопок!"
+        "/clear - Очистить все\n\n"
+        "Нажми /new и выбери время!"
     )
 
 # --- Команда /new ---
 @dp.message(Command("new"))
 async def cmd_new(message: Message, state: FSMContext):
     await state.set_state(ReminderForm.waiting_for_text)
-    await message.answer(
-        "📝 Введите текст напоминания:\n"
-        "(можно отменить командой /cancel)"
-    )
+    await message.answer("📝 Введите текст напоминания:")
 
 @dp.message(ReminderForm.waiting_for_text)
 async def process_text(message: Message, state: FSMContext):
     if message.text.startswith('/'):
         await state.clear()
-        await message.answer("❌ Создание отменено.")
+        await message.answer("❌ Отменено.")
         return
     
     await state.update_data(text=message.text)
     await state.set_state(ReminderForm.waiting_for_time)
-    
     await message.answer(
-        "🕐 Выберите время напоминания:",
+        "🕐 Выберите время:",
         reply_markup=get_time_keyboard()
     )
 
-# --- Обработка выбора времени ---
+# --- ЕДИНЫЙ ОБРАБОТЧИК ВСЕХ CALLBACK ---
 @dp.callback_query()
-async def handle_time_callback(callback: CallbackQuery, state: FSMContext):
-    if callback.data.startswith('time_'):
-        await callback.answer()
-        
+async def handle_all_callbacks(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = callback.data
+    
+    # --- ОБРАБОТКА ВЫБОРА ВРЕМЕНИ ---
+    if data.startswith('time_'):
         user_data = await state.get_data()
         text = user_data.get('text')
+        
+        if not text:
+            await callback.message.edit_text("❌ Ошибка: текст не найден. Начните заново /new")
+            await state.clear()
+            return
         
         now = datetime.datetime.now()
         time_map = {
@@ -191,23 +187,19 @@ async def handle_time_callback(callback: CallbackQuery, state: FSMContext):
             'time_1M': now + datetime.timedelta(days=30),
         }
         
-        if callback.data == 'time_custom':
+        if data == 'time_custom':
             await callback.message.edit_text(
                 "✏️ Введите время в формате:\n"
-                "`DD.MM.YYYY HH:MM`\n\n"
+                "`DD.MM.YYYY HH:MM`\n"
                 "Например: `25.12.2026 15:30`\n"
-                "Или `+5m` - через 5 минут\n"
-                "Или `+1h` - через час\n"
-                "Или `+1d` - через день",
+                "Или `+5m` - через 5 минут",
                 parse_mode="Markdown"
             )
             return
         
-        reminder_time = time_map.get(callback.data)
+        reminder_time = time_map.get(data)
         if reminder_time:
-            # Сохраняем время в state
             await state.update_data(time=reminder_time)
-            
             formatted_time = reminder_time.strftime("%d.%m.%Y в %H:%M")
             await callback.message.edit_text(
                 f"📝 {text}\n"
@@ -215,52 +207,74 @@ async def handle_time_callback(callback: CallbackQuery, state: FSMContext):
                 f"Всё верно?",
                 reply_markup=get_confirm_keyboard()
             )
-
-# --- Обработка подтверждения ---
-@dp.callback_query()
-async def handle_confirm(callback: CallbackQuery, state: FSMContext):
-    if callback.data == 'confirm_yes':
-        await callback.answer()
-        
-        user_data = await state.get_data()
-        text = user_data.get('text')
-        reminder_time = user_data.get('time')
-        
-        if not reminder_time:
-            await callback.message.edit_text("❌ Ошибка: время не выбрано. Попробуйте /new заново.")
+    
+    # --- ОБРАБОТКА ПОДТВЕРЖДЕНИЯ ---
+    elif data.startswith('confirm_'):
+        if data == 'confirm_yes':
+            user_data = await state.get_data()
+            text = user_data.get('text')
+            reminder_time = user_data.get('time')
+            
+            if not text or not reminder_time:
+                await callback.message.edit_text("❌ Ошибка. Попробуйте /new заново.")
+                await state.clear()
+                return
+            
+            user_id = str(callback.from_user.id)
+            if user_id not in reminders:
+                reminders[user_id] = []
+            
+            reminders[user_id].append({
+                'text': text,
+                'time': reminder_time
+            })
+            
+            save_reminders()
             await state.clear()
+            
+            formatted_time = reminder_time.strftime("%d.%m.%Y в %H:%M")
+            await callback.message.edit_text(
+                f"✅ Напоминание создано!\n\n"
+                f"📝 {text}\n"
+                f"🕐 {formatted_time}"
+            )
+        
+        elif data == 'confirm_no':
+            await state.clear()
+            await callback.message.edit_text("❌ Создание отменено.")
+    
+    # --- ОБРАБОТКА УДАЛЕНИЯ ---
+    elif data.startswith('del_'):
+        user_id = str(callback.from_user.id)
+        
+        if data == 'del_cancel':
+            await callback.message.delete()
             return
         
-        user_id = str(callback.from_user.id)
-        if user_id not in reminders:
-            reminders[user_id] = []
-        
-        reminders[user_id].append({
-            'text': text,
-            'time': reminder_time
-        })
-        
-        save_reminders()
-        await state.clear()
-        
-        formatted_time = reminder_time.strftime("%d.%m.%Y в %H:%M")
-        await callback.message.edit_text(
-            f"✅ Напоминание создано!\n\n"
-            f"📝 {text}\n"
-            f"🕐 {formatted_time}"
-        )
-    
-    elif callback.data == 'confirm_no':
-        await callback.answer()
-        await state.clear()
-        await callback.message.edit_text("❌ Создание отменено.")
+        try:
+            index = int(data.split('_')[1])
+            if user_id in reminders and 0 <= index < len(reminders[user_id]):
+                removed = reminders[user_id].pop(index)
+                if not reminders[user_id]:
+                    del reminders[user_id]
+                save_reminders()
+                
+                await callback.message.delete()
+                await callback.message.answer(
+                    f"✅ Удалено: {removed['text']}\n"
+                    f"🕐 {removed['time'].strftime('%d.%m.%Y %H:%M')}"
+                )
+            else:
+                await callback.answer("❌ Не найдено", show_alert=True)
+        except:
+            await callback.answer("❌ Ошибка", show_alert=True)
 
 # --- Обработка кастомного времени ---
 @dp.message(ReminderForm.waiting_for_time)
 async def process_custom_time(message: Message, state: FSMContext):
     if message.text.startswith('/'):
         await state.clear()
-        await message.answer("❌ Создание отменено.")
+        await message.answer("❌ Отменено.")
         return
     
     user_data = await state.get_data()
@@ -311,7 +325,7 @@ async def cmd_cancel(message: Message, state: FSMContext):
         return
     
     await state.clear()
-    await message.answer("❌ Операция отменена.")
+    await message.answer("❌ Отменено.")
 
 # --- Команда /list ---
 @dp.message(Command("list"))
@@ -319,7 +333,7 @@ async def cmd_list(message: Message):
     user_id = str(message.from_user.id)
     
     if user_id not in reminders or not reminders[user_id]:
-        await message.answer("📭 У вас нет активных напоминаний.")
+        await message.answer("📭 Нет напоминаний.")
         return
     
     user_reminders = sorted(reminders[user_id], key=lambda x: x['time'])
@@ -377,36 +391,6 @@ async def cmd_del(message: Message):
     except:
         await message.answer("❌ Используйте: /del номер")
 
-# --- Обработка удаления через callback ---
-@dp.callback_query()
-async def handle_delete_callback(callback: CallbackQuery):
-    if callback.data.startswith('del_'):
-        user_id = str(callback.from_user.id)
-        
-        if callback.data == 'del_cancel':
-            await callback.message.delete()
-            await callback.answer("❌ Отменено")
-            return
-        
-        try:
-            index = int(callback.data.split('_')[1])
-            if user_id in reminders and 0 <= index < len(reminders[user_id]):
-                removed = reminders[user_id].pop(index)
-                if not reminders[user_id]:
-                    del reminders[user_id]
-                save_reminders()
-                
-                await callback.message.delete()
-                await callback.answer("✅ Удалено!")
-                await callback.message.answer(
-                    f"✅ Удалено: {removed['text']}\n"
-                    f"🕐 {removed['time'].strftime('%d.%m.%Y %H:%M')}"
-                )
-            else:
-                await callback.answer("❌ Не найдено")
-        except:
-            await callback.answer("❌ Ошибка")
-
 # --- Команда /clear ---
 @dp.message(Command("clear"))
 async def cmd_clear(message: Message):
@@ -427,16 +411,15 @@ async def cmd_clear(message: Message):
 async def cmd_help(message: Message):
     await message.answer(
         "🤖 **Помощь**\n\n"
-        "Команды:\n"
         "/new - Создать напоминание\n"
         "/list - Список напоминаний\n"
-        "/del [номер] - Удалить\n"
+        "/del - Удалить напоминание\n"
         "/clear - Очистить всё\n\n"
-        "При создании просто выбери время из кнопок!\n"
+        "При создании выбери время из кнопок!\n"
         "Или введи своё время в формате DD.MM.YYYY HH:MM"
     )
 
-# --- Запуск бота ---
+# --- Запуск ---
 async def main():
     load_reminders()
     print(f"Загружено напоминаний: {sum(len(r) for r in reminders.values())}")
