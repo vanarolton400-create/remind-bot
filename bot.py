@@ -11,7 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 # --- Конфигурация ---
-TOKEN = '8782242151:AAEF-HEWo4vPi5LkLljPT6Pzk_GDLKnn96s'
+TOKEN = '8698436174:AAFptbWi4YqIYe9Q81AJKYdKqrQy4MrIv7c'
 REMINDERS_FILE = 'reminders.json'
 DEFAULT_TIMEZONE = 3  # Москва по умолчанию
 
